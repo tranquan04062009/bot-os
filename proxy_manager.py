@@ -76,7 +76,7 @@ class ProxyManager:
 
     async def gather_proxies(self):
         self.load_static_proxies()
-        if len(self.proxies) < 20:  # Tăng số proxy tối thiểu
+        if len(self.proxies) < 20:
             tasks = [self.fetch_proxies(source) for source in self.sources]
             await asyncio.gather(*tasks)
             logger.info(f"Collected {len(self.proxies)} raw proxies from web.")
