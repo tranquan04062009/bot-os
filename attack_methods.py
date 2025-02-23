@@ -42,12 +42,13 @@ class Layer4Attack(AttackBase):
     async def run(self):
         self.running = True
         self.start_time = time()
-        end_time = self.start_time + self.duration
         if isinstance(self.target, str):
             if "http" in self.target.lower():
                 logger.error(f"Method {self.method} requires IP:port, not URL. Stopping attack.")
                 self.running = False
                 return
+            if ":" not in self.target:
+                self.target += ":80"
             host, port = self.target.split(":")
             self.target = (socket.gethostbyname(host), int(port))
         methods = {
@@ -58,7 +59,10 @@ class Layer4Attack(AttackBase):
         }
         if self.method in methods:
             tasks = [asyncio.create_task(methods[self.method]()) for _ in range(self.threads)]
-            await asyncio.wait(tasks, timeout=self.duration)
+            try:
+                await asyncio.wait(tasks, timeout=self.duration)
+            except asyncio.TimeoutError:
+                logger.info(f"Attack {self.method} on {self.target} timed out after {self.duration}s")
         else:
             logger.error(f"Method {self.method} not supported.")
         self.running = False
@@ -125,7 +129,6 @@ class Layer7Attack(AttackBase):
     async def run(self):
         self.running = True
         self.start_time = time()
-        end_time = self.start_time + self.duration
         self.parsed = urlparse(self.target)
         self.host = self.parsed.hostname
         self.port = self.parsed.port or (443 if self.parsed.scheme == "https" else 80)
@@ -138,7 +141,10 @@ class Layer7Attack(AttackBase):
         }
         if self.method in methods:
             tasks = [asyncio.create_task(methods[self.method]()) for _ in range(self.threads)]
-            await asyncio.wait(tasks, timeout=self.duration)
+            try:
+                await asyncio.wait(tasks, timeout=self.duration)
+            except asyncio.TimeoutError:
+                logger.info(f"Attack {self.method} on {self.target} timed out after {self.duration}s")
         else:
             logger.error(f"Method {self.method} not supported.")
         self.running = False
