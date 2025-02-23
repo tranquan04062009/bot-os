@@ -4,5 +4,5 @@ requests==2.28.1
 beautifulsoup4==4.11.1
 psutil==5.9.4
 cloudscraper==1.2.71
-PyRoxy==1.0.1
+PyRoxy
 h2==4.1.0  # Hỗ trợ HTTP/2
