@@ -9,6 +9,8 @@
     "https://raw.githubusercontent.com/MHProDev/MHDDoS/main/files/ntp.txt"
   ],
   "proxy_file": "proxies.txt",
+  "referers_file": "referers.txt",
+  "user_agents_file": "user_agents.txt",
   "default_threads": 1000,
   "default_rpc": 200,
   "default_duration": 60,
