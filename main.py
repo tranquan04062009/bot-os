@@ -3,7 +3,7 @@ import asyncio
 from threading import Thread
 import socket
 from time import sleep
-from .proxy_manager import ProxyManager
+from proxy_manager import ProxyManager
 from .attack_methods import Layer4Attack, Layer7Attack
 from .config import config
 import logging
