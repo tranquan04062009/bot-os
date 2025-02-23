@@ -11,3 +11,9 @@ def humanbytes(size):
         size /= 1024
         unit_idx += 1
     return f"{size:.2f} {units[unit_idx]}"
+
+def format_time(seconds):
+    """Chuyển đổi giây thành định dạng phút:giây"""
+    minutes = int(seconds // 60)
+    secs = int(seconds % 60)
+    return f"{minutes:02d}:{secs:02d}"
