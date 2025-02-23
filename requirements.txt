@@ -4,4 +4,3 @@ requests
 beautifulsoup4
 psutil
 cloudscraper
-hyper
