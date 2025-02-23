@@ -26,7 +26,7 @@ class ProxyManager:
     async def fetch_proxies(self, url):
         async with aiohttp.ClientSession() as session:
             try:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=3)) as resp:  # Giảm timeout hơn nữa
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=2)) as resp:
                     if resp.status == 200:
                         text = await resp.text()
                         if "proxyscrape" in url:
@@ -63,11 +63,11 @@ class ProxyManager:
         try:
             if proxy.type == "HTTP":
                 async with aiohttp.ClientSession() as session:
-                    async with session.get("http://httpbin.org/get", proxy=f"http://{proxy}", timeout=aiohttp.ClientTimeout(total=2)) as resp:
+                    async with session.get("http://httpbin.org/get", proxy=f"http://{proxy}", timeout=aiohttp.ClientTimeout(total=1)) as resp:
                         return resp.status == 200
             else:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(2)
+                sock.settimeout(1)
                 sock.connect((proxy.ip, proxy.port))
                 sock.close()
                 return True
@@ -76,12 +76,11 @@ class ProxyManager:
 
     async def gather_proxies(self):
         self.load_static_proxies()
-        if len(self.proxies) < 10:
+        if len(self.proxies) < 20:  # Tăng số proxy tối thiểu
             tasks = [self.fetch_proxies(source) for source in self.sources]
             await asyncio.gather(*tasks)
             logger.info(f"Collected {len(self.proxies)} raw proxies from web.")
 
-        # Kiểm tra proxy với số lượng lớn hơn
         check_tasks = [self.check_proxy(proxy) for proxy in self.proxies]
         results = await asyncio.gather(*check_tasks, return_exceptions=True)
         self.proxies = {p for p, r in zip(self.proxies, results) if r is True}
