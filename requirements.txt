@@ -4,5 +4,4 @@ requests
 beautifulsoup4
 psutil
 cloudscraper
-h2
-PyRoxy
+hyper
