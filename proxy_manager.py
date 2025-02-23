@@ -3,6 +3,7 @@ import aiohttp
 from bs4 import BeautifulSoup
 import logging
 import socket
+import os
 
 logging.basicConfig(format='[%(asctime)s - %(levelname)s] %(message)s', level=logging.INFO)
 logger = logging.getLogger("ProxyManager")
@@ -17,8 +18,9 @@ class Proxy:
         return f"{self.ip}:{self.port}"
 
 class ProxyManager:
-    def __init__(self, sources):
+    def __init__(self, sources, proxy_file):
         self.sources = sources
+        self.proxy_file = proxy_file
         self.proxies = set()
 
     async def fetch_proxies(self, url):
@@ -42,11 +44,26 @@ class ProxyManager:
             except Exception as e:
                 logger.error(f"Failed to fetch proxies from {url}: {e}")
 
-    async def check_proxy(self, proxy, test_url="http://httpbin.org/get"):
+    def load_static_proxies(self):
+        if os.path.exists(self.proxy_file):
+            with open(self.proxy_file, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if ":" in line:
+                        if "socks" in line:
+                            ip, port = line.split("://")[1].split(":")
+                            proxy_type = "SOCKS5" if "socks5" in line else "SOCKS4"
+                        else:
+                            ip, port = line.split(":")
+                            proxy_type = "HTTP"
+                        self.proxies.add(Proxy(ip, port, proxy_type))
+            logger.info(f"Loaded {len(self.proxies)} proxies from {self.proxy_file}")
+
+    async def check_proxy(self, proxy):
         try:
             if proxy.type == "HTTP":
                 async with aiohttp.ClientSession() as session:
-                    async with session.get(test_url, proxy=f"http://{proxy}", timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    async with session.get("http://httpbin.org/get", proxy=f"http://{proxy}", timeout=aiohttp.ClientTimeout(total=5)) as resp:
                         return resp.status == 200
             else:  # SOCKS4/5
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -58,11 +75,16 @@ class ProxyManager:
             return False
 
     async def gather_proxies(self):
-        tasks = [self.fetch_proxies(source) for source in self.sources]
-        await asyncio.gather(*tasks)
-        logger.info(f"Collected {len(self.proxies)} raw proxies.")
+        # Load từ file tĩnh trước
+        self.load_static_proxies()
 
-        # Kiểm tra proxy bất đồng bộ
+        # Nếu không có đủ proxy, crawl thêm
+        if len(self.proxies) < 10:
+            tasks = [self.fetch_proxies(source) for source in self.sources]
+            await asyncio.gather(*tasks)
+            logger.info(f"Collected {len(self.proxies)} raw proxies from web.")
+
+        # Kiểm tra proxy
         check_tasks = [self.check_proxy(proxy) for proxy in self.proxies]
         results = await asyncio.gather(*check_tasks)
         self.proxies = {p for p, r in zip(self.proxies, results) if r}
