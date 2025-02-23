@@ -12,7 +12,7 @@ class Proxy:
     def __init__(self, ip, port, proxy_type="HTTP"):
         self.ip = ip
         self.port = int(port)
-        self.type = proxy_type.upper()  # HTTP, SOCKS4, SOCKS5
+        self.type = proxy_type.upper()
 
     def __str__(self):
         return f"{self.ip}:{self.port}"
@@ -26,7 +26,7 @@ class ProxyManager:
     async def fetch_proxies(self, url):
         async with aiohttp.ClientSession() as session:
             try:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=3)) as resp:  # Giảm timeout hơn nữa
                     if resp.status == 200:
                         text = await resp.text()
                         if "proxyscrape" in url:
@@ -63,11 +63,11 @@ class ProxyManager:
         try:
             if proxy.type == "HTTP":
                 async with aiohttp.ClientSession() as session:
-                    async with session.get("http://httpbin.org/get", proxy=f"http://{proxy}", timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    async with session.get("http://httpbin.org/get", proxy=f"http://{proxy}", timeout=aiohttp.ClientTimeout(total=2)) as resp:
                         return resp.status == 200
-            else:  # SOCKS4/5
+            else:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(5)
+                sock.settimeout(2)
                 sock.connect((proxy.ip, proxy.port))
                 sock.close()
                 return True
@@ -75,18 +75,15 @@ class ProxyManager:
             return False
 
     async def gather_proxies(self):
-        # Load từ file tĩnh trước
         self.load_static_proxies()
-
-        # Nếu không có đủ proxy, crawl thêm
         if len(self.proxies) < 10:
             tasks = [self.fetch_proxies(source) for source in self.sources]
             await asyncio.gather(*tasks)
             logger.info(f"Collected {len(self.proxies)} raw proxies from web.")
 
-        # Kiểm tra proxy
+        # Kiểm tra proxy với số lượng lớn hơn
         check_tasks = [self.check_proxy(proxy) for proxy in self.proxies]
-        results = await asyncio.gather(*check_tasks)
-        self.proxies = {p for p, r in zip(self.proxies, results) if r}
+        results = await asyncio.gather(*check_tasks, return_exceptions=True)
+        self.proxies = {p for p, r in zip(self.proxies, results) if r is True}
         logger.info(f"Found {len(self.proxies)} working proxies.")
         return self.proxies
