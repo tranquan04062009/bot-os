@@ -1,7 +1,7 @@
-telebot==0.0.5
-aiohttp==3.8.3
-requests==2.28.1
-beautifulsoup4==4.11.1
-psutil==5.9.4
-cloudscraper==1.2.71
-h2==4.1.0  # Hỗ trợ HTTP/2
+telebot
+aiohttp
+requests
+beautifulsoup4
+psutil
+cloudscraper
+h2
