@@ -70,6 +70,9 @@ def format_status(attack):
         f"🔗 *Proxies*: `{len(proxies)}`"
     )
 
+def run_bot():
+    bot.polling(none_stop=True)
+
 @bot.message_handler(commands=['start'])
 def start(message):
     bot.reply_to(message, (
@@ -115,21 +118,21 @@ def attack(message):
         ), parse_mode="Markdown")
         message_ids[message.chat.id] = msg.message_id
 
-        asyncio.create_task(attack.run())
+        asyncio.get_event_loop().create_task(attack.run())
         attacks[message.chat.id] = attack
 
-        def update_status():
+        async def update_status():
             while attack.running:
                 try:
                     bot.edit_message_text(format_status(attack), chat_id=message.chat.id, 
                                         message_id=message_ids[message.chat.id], parse_mode="Markdown")
                 except:
                     pass
-                sleep(1)
+                await asyncio.sleep(1)
             bot.edit_message_text(f"🛑 *Attack Stopped* 🛑\n📊 *Final Report*:\n{format_status(attack)}",
                                 chat_id=message.chat.id, message_id=message_ids[message.chat.id], parse_mode="Markdown")
 
-        Thread(target=update_status, daemon=True).start()
+        asyncio.get_event_loop().create_task(update_status())
     except Exception as e:
         bot.reply_to(message, f"❌ *Error*: `{str(e)}`", parse_mode="Markdown")
 
@@ -151,8 +154,11 @@ def proxies_cmd(message):
 async def main():
     await load_proxies()
     load_referers_and_user_agents()
+    bot_thread = Thread(target=run_bot, daemon=True)
+    bot_thread.start()
     logger.info("Bot started.")
-    bot.polling(none_stop=True)
+    while True:  # Giữ vòng lặp chính chạy
+        await asyncio.sleep(1)
 
 if __name__ == "__main__":
     asyncio.run(main())
