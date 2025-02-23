@@ -1,7 +1,6 @@
 {
   "telegram_token": "7270463906:AAGTsnIy1ZJO9dayuXZ568KxwKTcD5GvsSA",
-  {
-    "proxy_sources": [
+  "proxy_sources": [
     "https://www.free-proxy-list.net/",
     "https://proxyscrape.com/free-proxy-list",
     "https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks5"
