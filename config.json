@@ -1,17 +1,17 @@
 {
   "telegram_token": "7270463906:AAGTsnIy1ZJO9dayuXZ568KxwKTcD5GvsSA",
-  "proxy_sources": [
+  {
+    "proxy_sources": [
     "https://www.free-proxy-list.net/",
     "https://proxyscrape.com/free-proxy-list",
     "https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks5"
   ],
   "amplification_sources": [
-    "https://raw.githubusercontent.com/MHProDev/MHDDoS/main/files/ntp.txt",
-    "https://raw.githubusercontent.com/MHProDev/MHDDoS/main/files/dns.txt"
+    "https://raw.githubusercontent.com/MHProDev/MHDDoS/main/files/ntp.txt"
   ],
+  "proxy_file": "proxies.txt",
   "default_threads": 1000,
   "default_rpc": 200,
   "default_duration": 60,
-  "max_cpu_usage": 85,
-  "minecraft_default_protocol": 47
+  "max_cpu_usage": 85
 }
