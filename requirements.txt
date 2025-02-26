@@ -1,6 +1,7 @@
-telebot
-aiohttp
+python-telegram-bot
 requests
-beautifulsoup4
-psutil
 cloudscraper
+beautifulsoup4
+dnspython
+icmplib
+psutil
