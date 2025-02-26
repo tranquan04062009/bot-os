@@ -38,7 +38,7 @@ ctx.check_hostname = False
 ctx.verify_mode = CERT_NONE
 
 # Hằng số
-__version__ = "GrokDDoSBot 4.0 - Siêu Tăng Cường & Tối Giản"
+__version__ = "DDOS BOT 4.0 - Tran Quan"
 REQUESTS_SENT = threading.Value('i', 0)
 BYTES_SENT = threading.Value('i', 0)
 PROXY_LIST = set()
@@ -629,7 +629,7 @@ async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Hàm chính
 def main():
-    application = Application.builder().token("YOUR_TELEGRAM_BOT_TOKEN").build()
+    application = Application.builder().token("7834807188:AAFtO6u6mJ-1EaDm4W4qA_cb4KgICqSo734").build()
     
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("l4", l4))
