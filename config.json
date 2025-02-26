@@ -1,18 +1,7 @@
 {
-  "telegram_token": "7270463906:AAGO8qT3MSy0Wm3hZTWi4QNMXqOkkISgsC0",
-  "proxy_sources": [
-    "https://www.free-proxy-list.net/",
-    "https://proxyscrape.com/free-proxy-list",
-    "https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks5"
-  ],
-  "amplification_sources": [
-    "https://raw.githubusercontent.com/MHProDev/MHDDoS/main/files/ntp.txt"
-  ],
-  "proxy_file": "proxies.txt",
-  "referers_file": "referers.txt",
-  "user_agents_file": "user_agents.txt",
-  "default_threads": 1000,
-  "default_rpc": 200,
-  "default_duration": 60,
-  "max_cpu_usage": 85
+  "PROXY_TIMEOUT": 3,
+  "THREAD_LIMIT": 1000,
+  "MAX_CPU_USAGE": 90,
+  "PROXY_REFRESH_INTERVAL": 180,
+  "MAX_RETRIES": 5
 }
