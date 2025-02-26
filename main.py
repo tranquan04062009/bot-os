@@ -740,7 +740,7 @@ def main():
     # Khởi động luồng tự động làm mới proxy
     threading.Thread(target=auto_refresh_proxies, daemon=True).start()
     
-    application = Application.builder().token("YOUR_TELEGRAM_BOT_TOKEN").build()
+    application = Application.builder().token("7270463906:AAGO8qT3MSy0Wm3hZTWi4QNMXqOkkISgsC0").build()
     
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("l4", l4))
